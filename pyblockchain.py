@@ -123,8 +123,8 @@ def read_blockchain(f, fsize, block=None):
         if not blocks % 1000 or fpos == fsize:
             sys.stderr.write('\r%d blocks' % blocks)
         if dump:
-            return r
             break
+    return r
 
 def dump_blocks(block=None):
     fname = os.path.join(determine_db_dir(), 'blk0001.dat')
