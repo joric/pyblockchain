@@ -38,10 +38,12 @@ def read_string(f):
     return f.read(len)
 
 def read_tx(f):
+    tx_in = []
+    tx_out = []
     startpos = f.tell()
     tx_ver = u32(f)
+
     vin_sz = var_int(f)
-    tx_in = []
 
     for i in xrange(vin_sz):
         outpoint = f.read(32)
@@ -53,7 +55,6 @@ def read_tx(f):
         tx_in.append({ title: cbase.encode('hex'), "prev_out": prev_out})
 
     vout_sz = var_int(f)
-    tx_out = []
 
     for i in xrange(vout_sz):
         value = u64(f)
@@ -92,22 +93,22 @@ def read_block(f, dump=False):
     (ver, pb, mr, ts, bits, nonce) = struct.unpack('I32s32sIII', header)
     hash = dhash(header)
 
+    n_tx = var_int(f)
+
     r = {}
     r['hash'] = hash[::-1].encode('hex')
     r['ver'] = ver
     r['prev_block'] = pb.encode('hex')
     r['mrkl_root'] = mr.encode('hex')
-    r['ts'] = ts
+    r['time'] = ts
     r['bits'] = bits
     r['nonce'] = nonce
-
-    n_tx = var_int(f)
-    tx = []
+    r['n_tx'] = n_tx
+    r['size'] = size
+    r['tx'] = []
 
     for i in xrange(n_tx):
-        tx.append(read_tx(f))
-
-    r['tx'] = tx
+        r['tx'].append(read_tx(f))
 
     return r
 
