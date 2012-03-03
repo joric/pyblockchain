@@ -33,6 +33,26 @@ def var_int(f):
     elif t == 0xff: return u64(f)
     else: return t
 
+def opcode(t):
+    if   t == 0xac: return 'OP_CHECKSIG'
+    elif t == 0x76: return 'OP_DUP'
+    elif t == 0xa9: return 'OP_HASH160'
+    elif t == 0x88: return 'OP_EQUALVERIFY'
+    else: return 'OP_UNSUPPORTED:%02X' % t
+
+def parse_script(s):
+    r = []
+    i = 0
+    while i < len(s):
+        c = ord(s[i])
+        i += 1
+        if c > 0 and c < 0x4b:
+            r.append(s[i:i+c].encode('hex'))
+            i += c
+        else:
+            r.append(opcode(c))
+    return ' '.join(r)
+
 def read_string(f):
     len = var_int(f)
     return f.read(len)
@@ -48,19 +68,19 @@ def read_tx(f):
     for i in xrange(vin_sz):
         outpoint = f.read(32)
         n = u32(f)
-        cbase = read_string(f)
+        sig = read_string(f)
         seq = u32(f)
-        prev_out = {'hash': outpoint.encode('hex'), 'n': n }
-        title = ['scriptSig', 'coinbase'][int(n == 4294967295)]
-        tx_in.append({ title: cbase.encode('hex'), "prev_out": prev_out})
+        type = int(n != 4294967295)
+        name = ['coinbase','scriptSig'][type]
+        prev_out = {'hash':outpoint.encode('hex'), 'n':n}
+        tx_in.append({name:sig[type:].encode('hex'), "prev_out":prev_out})
 
     vout_sz = var_int(f)
 
     for i in xrange(vout_sz):
         value = u64(f)
-        script = read_string(f)
-        fvalue = '%.8f' % (value * 1e-8)
-        tx_out.append({'value': fvalue, 'scriptPubKey': script.encode('hex')})
+        spk = parse_script(read_string(f))
+        tx_out.append({'value': '%.8f' % (value * 1e-8), 'scriptPubKey': spk})
 
     lock_time = u32(f)
 
@@ -154,4 +174,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
