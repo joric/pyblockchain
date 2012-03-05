@@ -348,7 +348,8 @@ def google_chart(stats):
         '&chd=t:' + ','.join(dataset) + \
         '&chg=' + grid + \
         '&chls=2,4,0' + \
-        '&chm=B,C5D4B5BB,0,0,0'
+        '&chm=B,C5D4B5BB,0,0,0' + \
+        '&chtt=Bitcoin+blockchain+size+to+time, in megabytes'
 
 def scan(block=None, address=None, chart=None):
     global hash160, date, stats
