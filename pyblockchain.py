@@ -10,9 +10,8 @@ import platform
 import json
 import hashlib
 import optparse
-import time
 import datetime
-import math
+import time
 
 def determine_db_dir():
     if platform.system() == 'Darwin':
@@ -28,34 +27,6 @@ def rhash(s):
     h = hashlib.new('ripemd160')
     h.update(hashlib.sha256(s).digest())
     return h.digest()
-
-class ProgressBar:
-    def __init__(self, total=0):
-        self.count = 0
-        self.total = total
-        self.ts_start = time.time()
-        self.ts_last = self.ts_start
-
-    def __str__(self):
-        elapsed = self.ts_current - self.ts_start
-        left = elapsed * self.total / self.count - elapsed
-        p = (self.count * 100.0 / self.total)
-        return '%.2f%%' % (p)
-
-    def update(self, count):
-        self.count = count
-        self.ts_current = time.time()
-        done = self.count == self.total
-        last = self.ts_last
-        self.ts_last = self.ts_current
-        return done or int(self.ts_current) > int(last)
-
-hash160 = None
-param = None
-date = None
-stats = []
-received = {}
-volume = 0
 
 b58_digits = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 
@@ -109,6 +80,36 @@ def address_to_hash(s, addrtype=0):
         raise BadAddress(s)
     return hash160  
 
+class ProgressBar:
+    def __init__(self, total=0):
+        self.count = 0
+        self.total = total
+        self.ts_start = time.time()
+        self.ts_last = self.ts_start
+
+    def __str__(self):
+        elapsed = self.ts_current - self.ts_start
+        left = elapsed * self.total / self.count - elapsed
+        p = (self.count * 100.0 / self.total)
+        return '%.2f%% %s' % (p, self.ftime(left))
+
+    def ftime(self, seconds):
+        m, s = divmod(seconds, 60)
+        h, m = divmod(m, 60)
+        d, h = divmod(h, 24)
+        y, d = divmod(d, 365)
+        if y > 1: return "%d years" % y
+        elif d > 1: return "%d days" % d
+        else: return "%02d:%02d:%02d" % (h, m, s)
+
+    def update(self, count):
+        self.count = count
+        self.ts_current = time.time()
+        done = self.count == self.total
+        last = self.ts_last
+        self.ts_last = self.ts_current
+        return done or int(self.ts_current) > int(last)
+
 def  u8(f): return struct.unpack('B', f.read(1))[0]
 def u16(f): return struct.unpack('H', f.read(2))[0]
 def u32(f): return struct.unpack('I', f.read(4))[0]
@@ -128,277 +129,232 @@ def opcode(t):
     elif t == 0x88: return 'OP_EQUALVERIFY'
     else: return 'OP_UNSUPPORTED:%02X' % t
 
-def parse_script(s):
-    global param
-    r = []
-    i = 0
-    param = None
-    while i < len(s):
-        c = ord(s[i])
-        if c > 0 and c < 0x4b:
-            i += 1
-            param = s[i:i+c]
-            r.append(param.encode('hex'))
-            i += c
-        else:
-            r.append(opcode(c))
-            i += 1
-
-    if len(r) == 2 and r[1] == 'OP_CHECKSIG':
-        param = rhash(param)
-
-    return ' '.join(r)
-
 def read_string(f):
     len = var_int(f)
     return f.read(len)
 
-def read_tx(f):
-    tx_in = []
-    tx_out = []
-    startpos = f.tell()
-    tx_ver = u32(f)
+class BCParser(object):
+    def __init__(self):
+        self.fullscan = False
 
-    vin_sz = var_int(f)
+    def scan(self):
+        fname = os.path.join(determine_db_dir(), 'blk0001.dat')
+        f = open(fname, 'rb')
+        self.read_blockchain(f)
+        f.close()
 
-    for i in xrange(vin_sz):
-        outpoint = f.read(32)
-        n = u32(f)
-        sig = read_string(f)
-        seq = u32(f)
+    def parse_script(self, s, value):
+        r = []
+        i = 0
+        while i < len(s):
+            c = ord(s[i])
+            if c > 0 and c < 0x4b:
+                i += 1
+                param = s[i:i+c]
+                r.append(param.encode('hex'))
+                i += c
+            else:
+                r.append(opcode(c))
+                i += 1
 
-        type = int(n != 4294967295)
-        name = ['coinbase','scriptSig'][type]
-        prev_out = {'hash':outpoint.encode('hex'), 'n':n}
-        tx_in.append({name:sig[type:].encode('hex'), "prev_out":prev_out})
+            if len(r) == 5 and r[1] == 'OP_HASH160':
+                self.address({'hash':param, 'value':value})
 
-    vout_sz = var_int(f)
+            elif len(r) == 2 and r[1] == 'OP_CHECKSIG':
+                self.address({'hash':rhash(param), 'value':value})
 
-    for i in xrange(vout_sz):
-        value = u64(f)
-        script = read_string(f)
-        spk = parse_script(script)
+        return ' '.join(r)
 
-        global hash160, param, received, volume
-        if param and hash160 == param:
-            volume += value
-            key = param
-            if key not in received:
-                received[key] = 0
-            received[key] += value
+    def read_tx(self, f):
+        tx_in = []
+        tx_out = []
+        startpos = f.tell()
+        tx_ver = u32(f)
 
-        tx_out.append({'value':'%.8f' % (value * 1e-8), 'scriptPubKey':spk})
+        vin_sz = var_int(f)
 
-    lock_time = u32(f)
+        for i in xrange(vin_sz):
+            outpoint = f.read(32)
+            n = u32(f)
+            sig = read_string(f)
+            seq = u32(f)
 
-    size = f.tell() - startpos
-    f.seek(startpos)
-    hash = dhash(f.read(size))
+            type = int(n != 4294967295)
+            name = ['coinbase','scriptSig'][type]
+            prev_out = {'hash':outpoint.encode('hex'), 'n':n}
+            tx_in.append({name:sig[type:].encode('hex'), "prev_out":prev_out})
 
-    r = {}
-    r['hash'] = hash[::-1].encode('hex')
-    r['ver'] = tx_ver
-    r['vin_sz'] = vin_sz
-    r['vout_sz'] = vout_sz
-    r['lock_time'] = lock_time
-    r['size'] = size
-    r['in'] = tx_in
-    r['out'] = tx_out
+        vout_sz = var_int(f)
 
-    return r
+        for i in xrange(vout_sz):
+            value = u64(f)
+            script = read_string(f)
+            spk = self.parse_script(script, value)
+            tx_out.append({'value':'%.8f' % (value * 1e-8), 'scriptPubKey':spk})
 
-def next_date(date=None, ts=0, size=0):
-    global stats
+        lock_time = u32(f)
 
-    d = datetime.date.fromtimestamp(ts)
+        size = f.tell() - startpos
+        f.seek(startpos)
+        hash = dhash(f.read(size))
 
-    if not date or date <= d:
-        if not date:
-            date = datetime.date(2009, 1, 1)
-            dt = datetime.datetime.strptime(str(date), '%Y-%m-%d')
-            ts = int(time.mktime(dt.timetuple()))
+        r = {}
+        r['hash'] = hash[::-1].encode('hex')
+        r['ver'] = tx_ver
+        r['vin_sz'] = vin_sz
+        r['vout_sz'] = vout_sz
+        r['lock_time'] = lock_time
+        r['size'] = size
+        r['in'] = tx_in
+        r['out'] = tx_out
 
-        year, month = divmod(date.month + 1, 12)
-        if month == 0: 
-              month = 12
-              year = year - 1
+        return r
 
-        stats.append((ts, date, size))
+    def read_block(self, f, skip=False):
 
-        date = datetime.date(date.year + year, month, 1)
-    return date
+        magic = u32(f)
+        size = u32(f)
+        pos = f.tell()
 
-def read_block(f, skip=False):
-    global date
+        header = f.read(80)
 
-    magic = u32(f)
-    size = u32(f)
-    endpos = f.tell() + size
+        self.block_header(pos, size, header)
 
-    header = f.read(80)
-    (ver, pb, mr, ts, bits, nonce) = struct.unpack('I32s32sIII', header)
+        if skip:
+            f.seek(pos + size)
+            return False
 
-    date = next_date(date, ts, endpos)
+        (ver, pb, mr, ts, bits, nonce) = struct.unpack('I32s32sIII', header)
 
-    if skip:
-        f.seek(endpos)
-        return False
+        hash = dhash(header)
 
-    hash = dhash(header)
+        n_tx = var_int(f)
 
-    n_tx = var_int(f)
+        r = {}
+        r['hash'] = hash[::-1].encode('hex')
+        r['ver'] = ver
+        r['prev_block'] = pb.encode('hex')
+        r['mrkl_root'] = mr.encode('hex')
+        r['time'] = ts
+        r['bits'] = bits
+        r['nonce'] = nonce
+        r['n_tx'] = n_tx
+        r['size'] = size
+        r['tx'] = []
 
-    r = {}
-    r['hash'] = hash[::-1].encode('hex')
-    r['ver'] = ver
-    r['prev_block'] = pb.encode('hex')
-    r['mrkl_root'] = mr.encode('hex')
-    r['time'] = ts
-    r['bits'] = bits
-    r['nonce'] = nonce
-    r['n_tx'] = n_tx
-    r['size'] = size
-    r['tx'] = []
+        for i in xrange(n_tx):
+            r['tx'].append(self.read_tx(f))
 
-    for i in xrange(n_tx):
-        r['tx'].append(read_tx(f))
+        self.block(r)
 
-    return r
+        return r
 
-def read_blockchain(f, fsize, block):
-    global hash160, received, volume, date
+    def read_blockchain(self, f):
+        f.seek(0, os.SEEK_END)
+        fsize = f.tell()
+        f.seek(0)
 
-    stopblock = -1
+        p = ProgressBar(fsize)
+        r = []
+        fpos = 0
+        blocks = 0
 
-    p = ProgressBar(fsize)
-    r = []
-    fpos = 0
-    blocks = 0
-    while fpos < fsize and blocks != stopblock:
+        while fpos < fsize:
+            skip = (blocks != self.stopblock) and not self.fullscan
+            r = self.read_block(f, skip)
+            fpos = f.tell()
+            if blocks == self.stopblock:
+                break
+            blocks += 1
+            if p.update(fpos) or blocks == self.stopblock:
+                s = '%s, %d blocks' % (p, blocks)
+                sys.stderr.write('\r%s' % self.status(s))
+        return r
 
-        if hash160:
-            skip = False
-        else:
-            skip = (blocks != block)
+    def status(self, s):
+        return s
 
-        r = read_block(f, skip)
-        fpos = f.tell()
-        blocks += 1
+    def block_header(self, pos, size, header):
+        pass
 
-        if p.update(fpos):
-            sys.stderr.write('\r%s, %d blocks, %f BTC, %s' % (date, blocks, volume*1e-8, p))
+    def address(self, r):
+        pass
 
-        if not skip and not hash160:
-            break
+    def tx(self, r):
+        pass
 
-    if hash160:
-        keys = received.keys()
-        keys.sort(key=lambda s:-received[s])
-        for k in keys:
-            key = hash_to_address(k)
-            print '%s\t%f' % (key, received[k] * 1e-8)
-        return False
+    def block(self, r):
+        pass
 
-    if date:
-        print google_chart(stats)
-        for k in stats: print k[0], k[1], k[2]
+class BlockParser(BCParser):
+    def __init__(self, stopblock):
+        self.stopblock = int(stopblock)
+        self.fullscan = False
+        self.r = None
+        self.scan()
+        if self.r:
+            print json.dumps(self.r, indent=True)
+    def block(self, r):
+        self.r = r
 
-    return r
+class AddressParser(BCParser):
+    def __init__(self, address=None):
+        self.key = None
+        self.count = 0
+        self.total = 0
+        if address:
+            self.key = address_to_hash(address)
+        self.addr = {}
+        self.stopblock = -1
+        self.fullscan = True
+        self.scan()
+        keys = self.addr.keys()
+        keys.sort(key=lambda x:-self.addr[x][0])
+        for key in keys:
+            recv, sent, count = self.addr[key]
+            print "%s\t%.8f\t%.8f\t%d" % (hash_to_address(key), recv*1e-8, sent*1e-8, count)
 
-def google_chart(stats):
-    dataset = []
-    labels = []
-    values = []
+    def status(self, s):
+        return '%s, %d addresses, %.2f BTC' % (s, self.count, self.total*1e-8)
 
-    for k in stats:
-        dataset.append('%.2f' % (k[2] / 1024.0 / 1024.0))
-
-    step = 12
-    dts = 0
-    t0 = 0
-    for i in range(0, len(stats), step):
-        t = stats[i][0]
-        d = stats[i][1]
-        labels.append(str(d.year))
-        values.append(str(t))
-        dts = t - t0
-        t0 = t
-
-    m = len(stats) - 1
-
-    x1 = stats[0][0]
-    x2 = stats[m][0]
-    y1 = float(dataset[0])
-    y2 = float(dataset[m])
-
-    xdr = '%.2f,%.2f' % (x1, x2)
-    ydr = '%.2f,%.2f' % (y1, y2)
-
-    grid = '%.2f,%.2f,1,1' % (100.0 / ((x2-x1) / float(dts) * 4.0 ), 100.0 / (y2 / 50.0))
-
-    return 'http://chart.apis.google.com/chart' + \
-        '?chxl=1:|'+ '|'.join(labels) + \
-        '&chxp=1,' + ','.join(values) + \
-        '&chxr=0,'+ ydr + '|1,' + xdr + \
-        '&chxt=y,x' + \
-        '&chs=512x512' + \
-        '&cht=lc' + \
-        '&chco=3D7930' + \
-        '&chds=' + ydr + \
-        '&chd=t:' + ','.join(dataset) + \
-        '&chg=' + grid + \
-        '&chls=2,4,0' + \
-        '&chm=B,C5D4B5BB,0,0,0' + \
-        '&chtt=Bitcoin+blockchain+size+to+time, in megabytes'
-
-def scan(block=None, address=None, chart=None):
-    global hash160, date, stats
-
-    fname = os.path.join(determine_db_dir(), 'blk0001.dat')
-    f = open(fname, 'rb')
-    f.seek(0, os.SEEK_END)
-    fsize = f.tell()
-    f.seek(0)
-
-    if address:
-        hash160 = address_to_hash(address)
-
-    if chart:
-        date = next_date()
-
-    r = read_blockchain(f, fsize, block)
-    if r:
-        print json.dumps(r, indent=True)
-
-    f.close()
+    def address(self, r):
+        if self.key and r['hash'] != self.key:
+            return
+        key = r['hash']
+        value = r['value']
+        if key not in self.addr:
+            self.addr[key] = (0, 0, 0)
+            self.count += 1
+        recv,sent,count = self.addr[key]
+        recv += value
+        count += 1
+        self.count += 1
+        self.total += value
+        self.addr[key] = (recv, sent, count)
 
 def main():
     parser = optparse.OptionParser(usage='%prog [options]',
         version='%prog 1.0')
 
-    parser.add_option('--dumpblock', dest='block',
+    parser.add_option('--block', dest='block',
         help='dump block by index in json format')
 
     parser.add_option('--address', dest='address',
         help='get amount received by address')
 
-    parser.add_option('--chart', action='store_true',
-        help='get blockchain statistics (size to time)')
+    parser.add_option('--index', action='store_true',
+        help='re-index blockchain')
 
-    (options, args) = parser.parse_args()
+    (opt, args) = parser.parse_args()
 
-    if not options.block and not options.address and not options.chart:
+    if not opt.block and not opt.address and not opt.index:
         print 'A mandatory option is missing\n'
         parser.print_help()
         sys.exit(1)
 
-    if options.block:
-        scan(block=int(options.block))
-    elif options.address:
-        scan(address=options.address)
-    elif options.chart:
-        scan(chart=options.chart)
+    if opt.block: BlockParser(opt.block)
+    elif opt.address: AddressParser(opt.address)
+    elif opt.index: AddressParser(None)
 
 if __name__ == '__main__':
     main()
-
