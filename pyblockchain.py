@@ -123,9 +123,9 @@ def var_int(f):
     else: return t
 
 def opcode(t):
-    if   t == 0xac: return 'OP_CHECKSIG'
+    if   t == 0xAC: return 'OP_CHECKSIG'
     elif t == 0x76: return 'OP_DUP'
-    elif t == 0xa9: return 'OP_HASH160'
+    elif t == 0xA9: return 'OP_HASH160'
     elif t == 0x88: return 'OP_EQUALVERIFY'
     else: return 'OP_UNSUPPORTED:%02X' % t
 
@@ -133,9 +133,11 @@ def read_string(f):
     len = var_int(f)
     return f.read(len)
 
-class BCParser(object):
+class BlockParser:
     def __init__(self):
         self.fullscan = False
+        self.startblock = 0
+        self.stopblock = -1
 
     def scan(self):
         fname = os.path.join(determine_db_dir(), 'blk0001.dat')
@@ -143,60 +145,81 @@ class BCParser(object):
         self.read_blockchain(f)
         f.close()
 
-    def parse_script(self, s, value):
+    def parse_script(self, script, value=0):
         r = []
         i = 0
-        while i < len(s):
-            c = ord(s[i])
-            if c > 0 and c < 0x4b:
+        while i < len(script):
+            b = ord(script[i])
+            if b < 0x4b:
                 i += 1
-                param = s[i:i+c]
+                param = script[i:i+b]
                 r.append(param.encode('hex'))
-                i += c
+                i += b
             else:
-                r.append(opcode(c))
+                r.append(opcode(b))
                 i += 1
-
-            if len(r) == 5 and r[1] == 'OP_HASH160':
-                self.address({'hash':param, 'value':value})
-
-            elif len(r) == 2 and r[1] == 'OP_CHECKSIG':
-                self.address({'hash':rhash(param), 'value':value})
-
         return ' '.join(r)
 
     def read_tx(self, f):
         tx_in = []
         tx_out = []
+        inputs = []
+        outputs = []
         startpos = f.tell()
         tx_ver = u32(f)
 
         vin_sz = var_int(f)
 
         for i in xrange(vin_sz):
-            outpoint = f.read(32)
+            op = f.read(32)
             n = u32(f)
-            sig = read_string(f)
+            script = read_string(f)
             seq = u32(f)
 
-            type = int(n != 4294967295)
-            name = ['coinbase','scriptSig'][type]
-            prev_out = {'hash':outpoint.encode('hex'), 'n':n}
-            tx_in.append({name:sig[type:].encode('hex'), "prev_out":prev_out})
+            prev_out = {'hash':op.encode('hex'), 'n':n}
+
+            if n == 4294967295:
+                cb = script.encode('hex')
+                tx_in.append({'coinbase': cb, "prev_out": prev_out})
+            else:
+                ss = self.parse_script(script)
+                tx_in.append({'scriptSig': ss, "prev_out": prev_out})
+                inputs.append( (op, n) )
 
         vout_sz = var_int(f)
 
         for i in xrange(vout_sz):
             value = u64(f)
             script = read_string(f)
+
             spk = self.parse_script(script, value)
-            tx_out.append({'value':'%.8f' % (value * 1e-8), 'scriptPubKey':spk})
+            tx_out.append({'value':'%.8f'%(value*1e-8), 'scriptPubKey': spk})
+
+            h160 = None
+
+            if len(script) == 25:# and ord(script[1]) == 0x76:
+                h160 = script[3:-2]
+
+            if len(script) == 67:# and ord(script[66]) == 0xAC:
+                pubkey = script[1:-1]
+                h160 = rhash(pubkey)
+
+            if h160:
+                outputs.append((h160,value,i))
 
         lock_time = u32(f)
 
         size = f.tell() - startpos
         f.seek(startpos)
         hash = dhash(f.read(size))
+
+        self.tx_hash(hash)
+
+        for op, n in inputs:
+            self.tx_input(hash, op, n)
+
+        for h160, value, n in outputs:
+            self.tx_output(hash, h160, value, n)
 
         r = {}
         r['hash'] = hash[::-1].encode('hex')
@@ -211,7 +234,6 @@ class BCParser(object):
         return r
 
     def read_block(self, f, skip=False):
-
         magic = u32(f)
         size = u32(f)
         pos = f.tell()
@@ -221,12 +243,13 @@ class BCParser(object):
         self.block_header(pos, size, header)
 
         if skip:
-            f.seek(pos + size)
-            return False
+            return f.seek(pos + size)
 
         (ver, pb, mr, ts, bits, nonce) = struct.unpack('I32s32sIII', header)
 
         hash = dhash(header)
+
+        self.block_hash(hash)
 
         n_tx = var_int(f)
 
@@ -245,8 +268,6 @@ class BCParser(object):
         for i in xrange(n_tx):
             r['tx'].append(self.read_tx(f))
 
-        self.block(r)
-
         return r
 
     def read_blockchain(self, f):
@@ -257,18 +278,28 @@ class BCParser(object):
         p = ProgressBar(fsize)
         r = []
         fpos = 0
-        blocks = 0
+        block = 0
 
         while fpos < fsize:
-            skip = (blocks != self.stopblock) and not self.fullscan
+
+            skip = (block != self.stopblock) and not self.fullscan
+
+            if block < self.startblock:
+                skip = True
+
             r = self.read_block(f, skip)
             fpos = f.tell()
-            if blocks == self.stopblock:
+
+            if block == self.stopblock:
                 break
-            blocks += 1
-            if p.update(fpos) or blocks == self.stopblock:
-                s = '%s, %d blocks' % (p, blocks)
+
+            block += 1
+            if p.update(fpos) or block == self.stopblock:
+                s = '%s, %d blocks' % (p, block)
                 sys.stderr.write('\r%s' % self.status(s))
+
+        sys.stderr.write('\n')
+
         return r
 
     def status(self, s):
@@ -276,85 +307,61 @@ class BCParser(object):
 
     def block_header(self, pos, size, header):
         pass
-
-    def address(self, r):
+    def block_hash(self, hash):
+        pass
+    def tx_hash(self, hash):
+        pass
+    def tx_input(self, tx, op, n):
+        pass
+    def tx_output(self, tx, h160, value, n):
         pass
 
-    def tx(self, r):
-        pass
+class BalanceParser(BlockParser):
+    def __init__(self):
+        BlockParser.__init__(self)
 
-    def block(self, r):
-        pass
-
-class BlockParser(BCParser):
-    def __init__(self, stopblock):
-        self.stopblock = int(stopblock)
-        self.fullscan = False
-        self.r = None
-        self.scan()
-        if self.r:
-            print json.dumps(self.r, indent=True)
-    def block(self, r):
-        self.r = r
-
-class AddressParser(BCParser):
-    def __init__(self, address=None):
-        self.key = None
-        self.count = 0
-        self.total = 0
-        if address:
-            self.key = address_to_hash(address)
-        self.addr = {}
-        self.stopblock = -1
         self.fullscan = True
-        self.scan()
-        keys = self.addr.keys()
-        keys.sort(key=lambda x:-self.addr[x][0])
-        for key in keys:
-            recv, sent, count = self.addr[key]
-            print "%s\t%.8f\t%.8f\t%d" % (hash_to_address(key), recv*1e-8, sent*1e-8, count)
+
+        self.stopblock = -1
+
+        self.addr = {}
+        self.outp = {}
 
     def status(self, s):
-        return '%s, %d addresses, %.2f BTC' % (s, self.count, self.total*1e-8)
+        return s + ', %d addresses, %d outpoints' % (len(self.addr), len(self.outp))
 
-    def address(self, r):
-        if self.key and r['hash'] != self.key:
-            return
-        key = r['hash']
-        value = r['value']
-        if key not in self.addr:
-            self.addr[key] = (0, 0, 0)
-            self.count += 1
-        recv,sent,count = self.addr[key]
-        recv += value
-        count += 1
-        self.count += 1
-        self.total += value
-        self.addr[key] = (recv, sent, count)
+    def add_hash(self, d, hash, f=None):
+        uid = len(d) + 1
+        if hash not in d:
+            d[hash] = uid, f
+        return d[hash]
+
+    def tx_input(self, tx, op, n):
+        key = op + str(n)
+        if key in self.outp:
+            h160, value = self.outp[key]
+            i, (recv, sent) = self.addr[h160]
+            self.addr[h160] = i, (recv, sent+value)
+            self.outp.pop(key)
+
+    def tx_output(self, tx, h160, value, n):
+        self.add_hash(self.addr, h160, (0,0))
+        i, (recv, sent) = self.addr[h160]
+        self.addr[h160] = i, (recv + value, sent)
+        self.outp[tx + str(n)] = h160, value
+
+    def dump(self):
+        keys = self.addr.keys()
+        keys.sort(key=lambda x:-self.addr[x][1][0])
+        for x in keys:
+            i,(recv,sent) = self.addr[x]
+            balance = recv - sent
+            print "%s\t%d\t%d\t%d\t%d" % (hash_to_address(x), i, recv, sent, balance)
 
 def main():
-    parser = optparse.OptionParser(usage='%prog [options]',
-        version='%prog 1.0')
-
-    parser.add_option('--block', dest='block',
-        help='dump block by index in json format')
-
-    parser.add_option('--address', dest='address',
-        help='get amount received by address')
-
-    parser.add_option('--index', action='store_true',
-        help='re-index blockchain')
-
-    (opt, args) = parser.parse_args()
-
-    if not opt.block and not opt.address and not opt.index:
-        print 'A mandatory option is missing\n'
-        parser.print_help()
-        sys.exit(1)
-
-    if opt.block: BlockParser(opt.block)
-    elif opt.address: AddressParser(opt.address)
-    elif opt.index: AddressParser(None)
+    p = BalanceParser()
+    p.scan()
+    p.dump()
 
 if __name__ == '__main__':
     main()

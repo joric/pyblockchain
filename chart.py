@@ -1,7 +1,7 @@
 import datetime
 import time
 import struct
-from pyblockchain import BCParser
+from pyblockchain import BlockParser
 
 def google_chart(stats):
     dataset = []
@@ -49,10 +49,9 @@ def google_chart(stats):
         '&chm=B,C5D4B5BB,0,0,0' + \
         '&chtt=Bitcoin+blockchain+size+to+time,+in+megabytes'
 
-class ChartParser(BCParser):
+class ChartParser(BlockParser):
     def __init__(self):
-        self.stopblock = -1
-        self.fullscan = False
+        BlockParser.__init__(self)
         self.stats = []
         self.date = self.next_date()
         self.scan()
