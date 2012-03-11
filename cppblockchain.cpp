@@ -1,16 +1,15 @@
+/*
+    cpp blockchain parser, public domain
+    see http://github.com/joric/pyblockchain
+*/
+
 #include <iostream>
-#include <iomanip>
 #include <fstream>
-#include <cstdlib>
-#include <signal.h>
 #include <time.h>
-#include <string.h>
-#include <algorithm>
+#include <string>
+#include <map>
 #include <openssl/sha.h>
 #include <openssl/ripemd.h>
-#include <map>
-#include <vector>
-#include <iterator>
 
 using namespace std;
 
@@ -55,7 +54,7 @@ char *rhash(char *src, int len)
 
 #ifndef __BASE58__
 char *address_to_hash(char *md) { static char r[32] = {0}; return r; }
-char *hash_to_address(char *md) { return (char*)"Unsupported"; }
+char *hash_to_address(char *md) { return htoa(md,20); }
 #else
 char *address_to_hash(char *address)
 {
@@ -138,7 +137,7 @@ public:
 
     bfile(const char *fname, openmode mode):ifstream(fname, mode) 
     {
-        bsize = 384 * MB;
+        bsize = 1 * MB;
         boffset = 0;
         memblock = new char[bsize];
     }
@@ -249,7 +248,7 @@ public:
         ProgressBar p(fsize);
 
         startblock = 0;
-        stopblock = -1;
+        stopblock = 1000;
 
         for (int block = 0; read_block(f, startblock >= block) > 0; block++)
         {
@@ -265,7 +264,7 @@ public:
 
         cout << endl << "Done." << endl;
 
-#if 0
+#if 1
         for (addr_map::iterator it=addr.begin(); it!=addr.end(); ++it) 
             cout << hash_to_address((char*)it->first.val) << " " << it->second << endl;
 #endif
