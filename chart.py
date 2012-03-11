@@ -1,3 +1,8 @@
+#!/usr/bin/env python
+
+# google chart parser
+# example output: http://goo.gl/A53P0
+
 import datetime
 import time
 import struct
