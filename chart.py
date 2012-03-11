@@ -37,7 +37,7 @@ def google_chart(stats):
     xdr = '%.2f,%.2f' % (x1, x2)
     ydr = '%.2f,%.2f' % (y1, y2)
 
-    grid = '%.2f,%.2f,1,1' % (100.0 / ((x2-x1) / float(dts) * 4.0 ), 100.0 / (y2 / 50.0))
+    grid = '%.2f,%.2f,1,1' % (100.0 / ((x2-x1) / float(dts) * 4.0), 100.0 / (y2 / 50.0))
 
     return 'http://chart.apis.google.com/chart' + \
         '?chxl=1:|'+ '|'.join(labels) + \
@@ -57,6 +57,8 @@ def google_chart(stats):
 class ChartParser(BlockParser):
     def __init__(self):
         BlockParser.__init__(self)
+        self.startblock = 0
+        self.stopblock = -1
         self.stats = []
         self.date = self.next_date()
         self.scan()
