@@ -136,6 +136,7 @@ def read_string(f):
 class BlockParser:
     def __init__(self):
         self.fullscan = False
+        self.block = 0
         self.startblock = 0
         self.stopblock = -1
 
@@ -176,7 +177,7 @@ class BlockParser:
             script = read_string(f)
             seq = u32(f)
 
-            prev_out = {'hash':op.encode('hex'), 'n':n}
+            prev_out = {'hash':op[::-1].encode('hex'), 'n':n}
 
             if n == 4294967295:
                 cb = script.encode('hex')
@@ -240,21 +241,11 @@ class BlockParser:
 
         header = f.read(80)
 
-        self.block_header(pos, size, header)
-
-        if skip:
-            return f.seek(pos + size)
-
         (ver, pb, mr, ts, bits, nonce) = struct.unpack('I32s32sIII', header)
-
-        hash = dhash(header)
-
-        self.block_hash(hash)
 
         n_tx = var_int(f)
 
         r = {}
-        r['hash'] = hash[::-1].encode('hex')
         r['ver'] = ver
         r['prev_block'] = pb.encode('hex')
         r['mrkl_root'] = mr.encode('hex')
@@ -263,10 +254,23 @@ class BlockParser:
         r['nonce'] = nonce
         r['n_tx'] = n_tx
         r['size'] = size
+
+        self.block_header(pos, size, header, r)
+
+        if skip:
+            f.seek(pos + size)
+            return r
+
+        hash = dhash(header)
+        self.block_hash(hash)
+
+        r['hash'] = hash[::-1].encode('hex')
         r['tx'] = []
 
         for i in xrange(n_tx):
             r['tx'].append(self.read_tx(f))
+
+        self.block_content(r)
 
         return r
 
@@ -278,24 +282,22 @@ class BlockParser:
         p = ProgressBar(fsize)
         r = []
         fpos = 0
-        block = 0
+
+        self.block = 0
 
         while fpos < fsize:
 
-            skip = (block != self.stopblock) and not self.fullscan
+            r = self.read_block(f, not self.fullscan)
 
-            if block < self.startblock:
-                skip = True
-
-            r = self.read_block(f, skip)
             fpos = f.tell()
 
-            if block == self.stopblock:
+            if self.block == self.stopblock:
                 break
 
-            block += 1
-            if p.update(fpos) or block == self.stopblock:
-                s = '%s, %d blocks' % (p, block)
+            self.block += 1
+
+            if p.update(fpos) or self.block == self.stopblock:
+                s = '%s, %d blocks' % (p, self.block)
                 sys.stderr.write('\r%s' % self.status(s))
 
         sys.stderr.write('\n')
@@ -305,15 +307,22 @@ class BlockParser:
     def status(self, s):
         return s
 
-    def block_header(self, pos, size, header):
-        pass
+    def block_header(self, pos, size, header, r):
+        return self.block < self.stopblock
+
     def block_hash(self, hash):
         pass
+
     def tx_hash(self, hash):
         pass
+
     def tx_input(self, tx, op, n):
         pass
+
     def tx_output(self, tx, h160, value, n):
+        pass
+
+    def block_content(self, r):
         pass
 
 class BalanceParser(BlockParser):
