@@ -379,8 +379,6 @@ public:
         uint32_t size = u32(f);
         uint64_t pos = f.tellg();
 
-        skip = true;
-
         if (!skip)
         {
             char header[80];
@@ -414,7 +412,6 @@ public:
 
         return balance;
     }
-
 };
 
 bool check_balances() 

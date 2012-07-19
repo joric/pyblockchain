@@ -7,7 +7,7 @@ class SQLiteIndexer(BlockParser):
         BlockParser.__init__(self)
 
         self.fullscan = True
-        self.stopblock = 100000
+        self.stopblock = -1
 
         self.cx = sqlite.connect('blockchain.db')
         self.cu = self.cx.cursor()
@@ -114,23 +114,23 @@ def browse():
 
     print "Browsing..."
 
-    cx = sqlite.connect('blockchain.db')
-    cu = cx.cursor()
+    con = sqlite.connect('blockchain.db')
+    cur = con.cursor()
 
     addr = '12cbQLTFMXRnSzktFkuoG3eHoMeFtpTu3S'
 
     print "Received"
 
-    cu.execute('select * from txout, addr where aid=addr.uid and addr="%s"' % addr)
+    cur.execute('select * from txout, addr where aid=addr.uid and addr="%s"' % addr)
 
-    for r in cu.fetchall():
+    for r in cur.fetchall():
         print r
 
     print "Sent"
 
-    cu.execute('select * from txin, txout, addr where txout.aid=addr.uid and txin.tid=txout.tid and addr="%s"' % addr)
+    cur.execute('select * from txin, txout, addr where txout.aid=addr.uid and txin.tid=txout.tid and addr="%s"' % addr)
 
-    for r in cu.fetchall():
+    for r in cur.fetchall():
         print r
 
 def main():

@@ -83,7 +83,7 @@ class ChartParser(BlockParser):
     def status(self, s):
         return '%s, %s' % (s, self.date)
 
-    def block_header(self, pos, size, header):
+    def block_header(self, pos, size, header, r):
         (ver, pb, mr, ts, bits, nonce) = struct.unpack('I32s32sIII', header)
         self.date = self.next_date(self.date, ts, pos + size)
 

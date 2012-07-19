@@ -189,6 +189,8 @@ class BlockParser:
 
         vout_sz = var_int(f)
 
+        compkeys = []
+
         for i in xrange(vout_sz):
             value = u64(f)
             script = read_string(f)
@@ -205,6 +207,13 @@ class BlockParser:
                 pubkey = script[1:-1]
                 h160 = rhash(pubkey)
 
+            if len(script) == 35:# and ord(script[66]) == 0xAC:
+                pubkey = script[1:-1]
+                compkeys.append(pubkey)
+                h160 = rhash(pubkey)
+
+
+
             if h160:
                 outputs.append((h160,value,i))
 
@@ -213,6 +222,9 @@ class BlockParser:
         size = f.tell() - startpos
         f.seek(startpos)
         hash = dhash(f.read(size))
+
+        if len(compkeys) > 0:
+            print hash[::-1].encode('hex')
 
         self.tx_hash(hash)
 
@@ -287,7 +299,9 @@ class BlockParser:
 
         while fpos < fsize:
 
-            r = self.read_block(f, not self.fullscan)
+            fullscan = self.fullscan and not self.startblock > self.block
+
+            r = self.read_block(f, not fullscan)
 
             fpos = f.tell()
 
@@ -331,6 +345,7 @@ class BalanceParser(BlockParser):
 
         self.fullscan = True
 
+        self.startblock = 160000
         self.stopblock = -1
 
         self.addr = {}
@@ -370,7 +385,7 @@ class BalanceParser(BlockParser):
 def main():
     p = BalanceParser()
     p.scan()
-    p.dump()
+#    p.dump()
 
 if __name__ == '__main__':
     main()
