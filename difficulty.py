@@ -13,19 +13,6 @@ import decimal, math
 
 from pyblockchain import BlockParser
 
-def timedelta(ts, delta):
-    date = datetime.datetime.fromtimestamp(ts)
-    if   delta == '+1 hour': date += datetime.timedelta(hours=1)
-    elif delta == '+1 day': date += datetime.timedelta(days=1)
-    elif delta == '+1 week': date += datetime.timedelta(weeks=1)
-    elif delta == '+1 month':
-        year, month= divmod(date.month + 1, 12)
-        if month == 0: 
-            month = 12
-            year = year - 1
-        date = datetime.datetime(date.year + year, month, 1)
-    return time.mktime(date.timetuple())
-
 def bits2diff(bits):
     fast_log = math.log
     exp = math.exp
@@ -44,17 +31,12 @@ class DiffParser(BlockParser):
     def block_header(self, pos, size, header, r):
         (ver, pb, mr, ts, bits, nonce) = struct.unpack('I32s32sIII', header)
         if bits != self.bits:
-
             if self.bits == -1:
                 self.bits = bits
-
             diff = bits2diff(bits)
-
             delta = diff / self.diff
-
             date = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
             print self.block, date, diff, delta
-
             self.bits = bits
             self.diff = diff
 
