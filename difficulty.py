@@ -27,10 +27,11 @@ class DiffParser(BlockParser):
         self.stopblock = -1
         self.bits = -1
         self.diff = 1.0
+        self.ts = 0
 
     def block_header(self, pos, size, header, r):
         (ver, pb, mr, ts, bits, nonce) = struct.unpack('I32s32sIII', header)
-        if bits != self.bits:
+        if bits != self.bits and ts > self.ts:
             if self.bits == -1:
                 self.bits = bits
             diff = bits2diff(bits)
@@ -39,6 +40,7 @@ class DiffParser(BlockParser):
             print self.block, date, diff, delta
             self.bits = bits
             self.diff = diff
+            self.ts = ts
 
 def main():
     p = DiffParser()

@@ -1,6 +1,7 @@
 /*
     cpp blockchain parser, public domain
     see http://github.com/joric/pyblockchain
+    compile using g++ -std=gnu++0x -lssl cppblockchain.cpp
 */
 
 #include <iostream>
@@ -9,8 +10,12 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory.h>
 #include <openssl/sha.h>
 #include <openssl/ripemd.h>
+#include <openssl/bn.h>
+#include <openssl/ecdsa.h>
+#include <openssl/obj_mac.h>
 
 using namespace std;
 
@@ -75,6 +80,14 @@ char *htoa(char *src, uint32_t len, bool reversed=false)
     return dest;
 }
 
+char* atoh(char *dest, char *src, int len)
+{
+    int v = 0;
+    while (sscanf(src, "%02x", &v) > 0)
+        *dest++ = v, src += 2;
+    return dest;
+}
+
 char *dhash(char* dest, char *src, int len)
 {
     unsigned char buf[32];
@@ -134,8 +147,11 @@ struct ProgressBar
         time_t elapsed = ts_current - ts_start;
         time_t left = elapsed * total / count - elapsed;
         left = left > 0 ? left : 0;
-        sprintf(buf, "%.2f%%, est. %dm %02ds", 
-            count * 100.0 / total, left / 60, left % 60);
+        int h = left / 60 / 60;
+        int m = left / 60 - h*60;
+        int s = left % 60;
+        sprintf(buf, "%.2f%%, est. %02d:%02d:%02d", 
+            count * 100.0 / total, h, m, s);
         return buf;
     }
 
@@ -169,9 +185,6 @@ string determine_db_dir()
 
 class BlockReader
 {
-    int startblock;
-    int stopblock;
-
     uint8_t   u8(ifstream& f) { uint8_t  n; f.read((char*)&n, 1); return n; }
     uint16_t u16(ifstream& f) { uint16_t n; f.read((char*)&n, 2); return n; }
     uint32_t u32(ifstream& f) { uint32_t n; f.read((char*)&n, 4); return n; }
@@ -187,9 +200,15 @@ class BlockReader
     }
 
 public:
-
+    int startblock;
+    int stopblock;
     dhash_map txns;
     rhash_map addr;
+
+    BlockReader() {
+        startblock = 0;
+        stopblock = -1;
+    }
 
     bool scan()
     {
@@ -207,13 +226,9 @@ public:
         uint64_t fsize = f.tellg();
         f.seekg(0, ios::beg);
 
-        cerr << "name: " << fname << endl;
-        cerr << "size: " << fsize / 1024 / 1024 << " MB" << endl;
+        cerr << fname << ", "<< fsize/1024/1024 << " MB" << endl;
 
         ProgressBar p(fsize);
-
-        startblock = 0;
-        stopblock = -1;
 
         for (int block = 0; read_block(f) > 0; block++)
         {
@@ -228,15 +243,12 @@ public:
             if (block == stopblock)
                 break;
         }
-
-        cerr << endl << "Done." << endl;
-
 #if 0
         for (rhash_map::iterator it=addr.begin(); it!=addr.end(); ++it) 
             cout << hash_to_address((char*)it->first.val) 
                 << " " << it->second.received 
                 << " " << it->second.sent 
-                << " " << get_balance((char*)it->first.val)
+                << " " << get_balance(hash160((char*)it->first.val))
                 << endl;
 #endif
 
@@ -400,53 +412,119 @@ public:
         static addr_info_t v; //static modifier used for zeroing
         return addr.insert(rhash_map::value_type(hash160(hash),v)).first;
     }
-
-    uint64_t get_balance(char* hash)
-    {
-        uint64_t balance = 0;
-
-        rhash_it address = addr.find( hash160(hash) );
-
-        if (address != addr.end())
-            balance = address->second.received - address->second.sent;
-
-        return balance;
-    }
 };
 
-bool check_balances() 
+EC_KEY *pkey = EC_KEY_new_by_curve_name(NID_secp256k1);
+BN_CTX* ctx = BN_CTX_new();
+const EC_GROUP *group = EC_KEY_get0_group(pkey);
+EC_POINT* pub_key = EC_POINT_new(group);
+
+char* pass_to_h160(const char* src, char* dest) {
+
+    unsigned char secret[32];
+    SHA256((unsigned char *)src, strlen(src), secret);
+
+    BIGNUM *priv_key = BN_bin2bn(secret, 32, BN_new());
+
+    EC_POINT_mul(group, pub_key, priv_key, 0, 0, ctx);
+
+    EC_KEY_set_private_key(pkey, priv_key);
+    EC_KEY_set_public_key(pkey, pub_key);
+
+    unsigned char buf[128], *p;
+    p = buf;
+    int len = 65;//i2o_ECPublicKey(pkey, 0);
+    i2o_ECPublicKey(pkey, &p);
+    rhash(dest, (char*)buf, len);
+
+    //EC_POINT_free(pub_key);
+    //BN_CTX_free(ctx);
+
+    //cout << htoa(dest, 20) << endl;
+
+    return dest;
+}
+
+int check_addresses(string fname, char* opt) 
 {
+
     BlockReader b;
+
+    ProgressBar p(14000000);
+
+    bool bake = opt && strcmp("-b", opt) == 0;
+
+    if (bake) 
+        b.stopblock = 1;
 
     if (!b.scan()) {
         cerr << "blockchain not found" << endl;
         return false;
     }
 
-    //wallet.txt is a plaintex "addr privkey\n"
-    string fname = determine_db_dir() + "wallet.txt";
     ifstream f(fname.c_str(), ios::in | ios::binary);
 
     if (!f.is_open()) {
-        cerr << "address list not found" << endl;
+        cerr << "file not found" << endl;
         return false;
     }
 
-    string address;
+    char hash[20];
+    string line;
+    unsigned long i = 0;
+    unsigned long sec = 0;
+    int found = 0;
 
-    while (f >> address) 
+    while (getline(f, line)) 
     {
-        uint64_t balance = b.get_balance( address_to_hash(address.c_str()) );
+        if (line[line.size() - 1] == '\r')
+            line.resize(line.size() - 1);
 
-        if (balance > 0)
-            cout << address << "\t" << balance * 1e-8 << endl;
+        size_t pos = line.find('\t');
+        if (pos != string::npos && pos == 40) { //baked
+            string l = line.substr(0, pos);
+            string r = line.substr(pos + 1);
+            atoh(hash, (char*)l.c_str(), 20);
+            line = r;
+        } else {
+            pass_to_h160(line.c_str(), hash);
+        }
 
-        getline(f, address);
+        rhash_it address = b.addr.find(hash160(hash));
+
+        if (address != b.addr.end()) 
+        {
+            uint64_t balance = address->second.received - address->second.sent;
+            cout << htoa(hash, 20) << "\t" << balance * 1e-8 << " " << line << endl;
+            found++;
+        }
+
+        if (bake) 
+        {
+            cout << htoa(hash, 20) << "\t" << line << endl;
+        }
+
+        if (p.update(++i))
+        {
+            sec++;
+            cerr << "\r" << p.c_str() << ", " << i << " keys, " 
+                << found << " found, " << i/sec << " k/s." ;
+        }
     }
+    return 0;
 }
 
-int main()
+int main(int argc, char **argv)
 {
-    check_balances();
+    cerr << "Compiled with openssl " << OPENSSL_VERSION_TEXT << endl;
+
+    if (argc < 2) 
+    {
+        cerr << "Usage: cppblockchain [dict file] <options>\nOptions: -b: bake dict" << endl;
+    }
+    else
+    {
+        check_addresses(argv[1], argv[2]);
+    }
 }
 
