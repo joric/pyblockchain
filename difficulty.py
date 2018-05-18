@@ -4,12 +4,8 @@
 # usage: difficulty.py > out
 
 import datetime
-import time
 import struct
-import urllib
-import os
-import sys
-import decimal, math
+import math
 
 from pyblockchain import BlockParser
 
