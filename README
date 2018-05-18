@@ -5,4 +5,4 @@ Options:
   -h, --help         show this help message and exit
   --block=BLOCK      dump block by index in json format
   --address=ADDRESS  get amount received by address
-  --index            re-index blockchain
+  --tx=TX            dump transaction by hash in hex format

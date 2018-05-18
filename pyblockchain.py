@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# pyblockchain.py 1.0
+# pyblockchain.py 1.1
 # public domain
 
 import struct
@@ -139,9 +139,14 @@ class BlockParser:
         self.block = 0
         self.startblock = 0
         self.stopblock = -1
+        self.hexdump = False
+        self.stop = False
 
     def scan(self):
-        fname = os.path.join(determine_db_dir(), 'blk0001.dat')
+        db_dir = determine_db_dir()
+        fname = os.path.join(db_dir, 'blk0001.dat')
+        if not os.path.exists(fname):
+            fname = os.path.join(db_dir, 'blocks', 'blk00000.dat')
         f = open(fname, 'rb')
         self.read_blockchain(f)
         f.close()
@@ -212,8 +217,6 @@ class BlockParser:
                 compkeys.append(pubkey)
                 h160 = rhash(pubkey)
 
-
-
             if h160:
                 outputs.append((h160,value,i))
 
@@ -243,6 +246,10 @@ class BlockParser:
         r['size'] = size
         r['in'] = tx_in
         r['out'] = tx_out
+
+        if self.hexdump:
+            f.seek(startpos)
+            self.tx_content_hex(hash, f.read(size).encode('hex'))
 
         return r
 
@@ -306,6 +313,9 @@ class BlockParser:
             fpos = f.tell()
 
             if self.block == self.stopblock:
+                self.stop = True
+
+            if self.stop:
                 break
 
             self.block += 1
@@ -339,20 +349,22 @@ class BlockParser:
     def block_content(self, r):
         pass
 
+    def tx_content(self, h):
+        pass
+
 class BalanceParser(BlockParser):
-    def __init__(self):
+    def __init__(self, address):
         BlockParser.__init__(self)
-
         self.fullscan = True
-
-        self.startblock = 160000
+        self.startblock = 0
         self.stopblock = -1
-
         self.addr = {}
         self.outp = {}
+        self.address = address
+        self.balance = 0
 
     def status(self, s):
-        return s + ', %d addresses, %d outpoints' % (len(self.addr), len(self.outp))
+        return s + ', address: %s, balance: %.8f' % (self.address, self.balance/(10**8))
 
     def add_hash(self, d, hash, f=None):
         uid = len(d) + 1
@@ -362,11 +374,15 @@ class BalanceParser(BlockParser):
 
     def tx_input(self, tx, op, n):
         key = op + str(n)
-        if key in self.outp:
-            h160, value = self.outp[key]
-            i, (recv, sent) = self.addr[h160]
-            self.addr[h160] = i, (recv, sent+value)
-            self.outp.pop(key)
+        if not key in self.outp:
+            return
+        h160, value = self.outp[key]
+        i, (recv, sent) = self.addr[h160]
+        self.addr[h160] = i, (recv, sent+value)
+        self.outp.pop(key)
+
+        if hash_to_address(h160)==self.address:
+            self.balance = recv - (sent+value)
 
     def tx_output(self, tx, h160, value, n):
         self.add_hash(self.addr, h160, (0,0))
@@ -374,18 +390,69 @@ class BalanceParser(BlockParser):
         self.addr[h160] = i, (recv + value, sent)
         self.outp[tx + str(n)] = h160, value
 
-    def dump(self):
+        if hash_to_address(h160)==self.address:
+            self.balance = (recv+value) - sent
+
+    def dump(self, address):
         keys = self.addr.keys()
         keys.sort(key=lambda x:-self.addr[x][1][0])
         for x in keys:
             i,(recv,sent) = self.addr[x]
             balance = recv - sent
-            print "%s\t%d\t%d\t%d\t%d" % (hash_to_address(x), i, recv, sent, balance)
+            if hash_to_address(x)==self.address:
+                print "%s\t%d\t%d\t%d\t%d" % (hash_to_address(x), i, recv, sent, balance)
+
+class DumpParser(BlockParser):
+    def __init__(self, block, tx):
+        BlockParser.__init__(self)
+        self.fullscan = True
+        self.startblock = 0 if block==None else int(block)
+        self.stopblock = -1 if block==None else int(block)
+        self.addr = {}
+        self.outp = {}
+        self.hexdump = tx is not None
+        self.blkindex = block
+        self.tx=tx
+
+    def block_content(self, r):
+        if self.blkindex and int(self.blkindex)==self.block:
+            print json.dumps(r, indent=2)
+            self.stop = True
+
+    def tx_content_hex(self, hash, h):
+        if hash[::-1].encode('hex')==self.tx:
+            print h
+            self.stop = True
+
+from optparse import OptionParser
 
 def main():
-    p = BalanceParser()
-    p.scan()
-#    p.dump()
+
+    parser = OptionParser(usage="%prog [options]", version="%prog 1.1")
+
+    parser.add_option("--block", dest="block",
+        help="dump block by index in json format")
+
+    parser.add_option("--address", dest="address",
+        help="get amount received by address")
+
+    parser.add_option("--tx", dest="tx",
+        help="dump transaction by hash in hex format")
+
+    (options, args) = parser.parse_args()
+
+    if options.block is None and options.tx is None and options.address is None:
+        print "A mandatory option is missing\n"
+        parser.print_help()
+        sys.exit(1)
+
+    if options.address:
+        p = BalanceParser(options.address)
+        p.scan()
+
+    if options.block or options.tx:
+        p = DumpParser(options.block, options.tx)
+        p.scan()
 
 if __name__ == '__main__':
     main()
