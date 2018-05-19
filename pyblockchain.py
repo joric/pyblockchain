@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# pyblockchain.py 1.1
+# pyblockchain.py 1.2
 # public domain
 
 import struct
@@ -91,7 +91,7 @@ class ProgressBar:
         elapsed = self.ts_current - self.ts_start
         left = elapsed * self.total / self.count - elapsed
         p = (self.count * 100.0 / self.total)
-        return '%.2f%% %s' % (p, self.ftime(left))
+        return '%.2f%%, ETA: %s' % (p, self.ftime(left))
 
     def ftime(self, seconds):
         m, s = divmod(seconds, 60)
@@ -144,12 +144,20 @@ class BlockParser:
 
     def scan(self):
         db_dir = determine_db_dir()
-        fname = os.path.join(db_dir, 'blk0001.dat')
-        if not os.path.exists(fname):
-            fname = os.path.join(db_dir, 'blocks', 'blk00000.dat')
-        f = open(fname, 'rb')
-        self.read_blockchain(f)
-        f.close()
+        i = 1
+        tpl = os.path.join(db_dir, 'blk%04d.dat')
+        if not os.path.exists(tpl % i):
+            i = 0
+            tpl = os.path.join(db_dir, 'blocks', 'blk%05d.dat')
+
+        while True:
+            fname = tpl % i
+            if not os.path.exists(fname):
+                break
+            f = open(fname, 'rb')
+            self.read_blockchain(f)
+            f.close()
+            i += 1
 
     def parse_script(self, script, value=0):
         r = []
@@ -321,10 +329,8 @@ class BlockParser:
             self.block += 1
 
             if p.update(fpos) or self.block == self.stopblock:
-                s = '%s, %d blocks' % (p, self.block)
+                s = '%s: %d blocks, %s' % (os.path.basename(f.name), self.block, p)
                 sys.stderr.write('\r%s' % self.status(s))
-
-        sys.stderr.write('\n')
 
         return r
 
@@ -428,7 +434,7 @@ from optparse import OptionParser
 
 def main():
 
-    parser = OptionParser(usage="%prog [options]", version="%prog 1.1")
+    parser = OptionParser(usage="%prog [options]", version="%prog 1.2")
 
     parser.add_option("--block", dest="block",
         help="dump block by index in json format")
